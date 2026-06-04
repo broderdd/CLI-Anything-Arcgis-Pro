@@ -30,10 +30,12 @@ namespace ProSimpleMapExport
     internal static class BridgeServer
     {
         public const int Port = 5005;
-        public static readonly string LogPath = @"C:\Users\zongr\ProSimpleMapExport\_bridge.log";
+        public static readonly string LogPath =
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ProSimpleMapExport_bridge.log");
         private static TcpListener _listener;
         private static Thread _thread;
         private static volatile bool _running;
+        private static string _token = "";  // shared secret from ARCGIS_BRIDGE_TOKEN; "" = auth disabled
 
         public static void Log(string msg)
         {
@@ -44,6 +46,10 @@ namespace ProSimpleMapExport
         {
             Log("BridgeServer.Start() called");
             if (_running) { Log("  already running"); return; }
+            _token = Environment.GetEnvironmentVariable("ARCGIS_BRIDGE_TOKEN") ?? "";
+            Log(_token.Length > 0
+                ? "  token auth ENABLED (X-Bridge-Token required)"
+                : "  token auth DISABLED (ARCGIS_BRIDGE_TOKEN not set)");
             try
             {
                 _listener = new TcpListener(IPAddress.Loopback, Port);
@@ -94,10 +100,29 @@ namespace ProSimpleMapExport
             }
 
             int contentLength = 0;
+            string presentedToken = "";
             foreach (var line in header.ToString().Split(new[] { "\r\n" }, StringSplitOptions.None))
             {
                 if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
                     int.TryParse(line.Substring("Content-Length:".Length).Trim(), out contentLength);
+                else if (line.StartsWith("X-Bridge-Token:", StringComparison.OrdinalIgnoreCase))
+                    presentedToken = line.Substring("X-Bridge-Token:".Length).Trim();
+            }
+
+            // Deny-by-default auth: when a token is configured, every request must present it.
+            if (_token.Length > 0 && !FixedTimeEquals(presentedToken, _token))
+            {
+                Log("  rejected request: missing/invalid X-Bridge-Token");
+                var denyBody = Encoding.UTF8.GetBytes(Json(false, null, "unauthorized: missing or invalid X-Bridge-Token"));
+                var denyHead = Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 403 Forbidden\r\n" +
+                    "Content-Type: application/json; charset=utf-8\r\n" +
+                    $"Content-Length: {denyBody.Length}\r\n" +
+                    "Connection: close\r\n\r\n");
+                stream.Write(denyHead, 0, denyHead.Length);
+                stream.Write(denyBody, 0, denyBody.Length);
+                stream.Flush();
+                return;
             }
 
             string body = "";
@@ -118,7 +143,6 @@ namespace ProSimpleMapExport
             var payload = Encoding.UTF8.GetBytes(json);
             var head = "HTTP/1.1 200 OK\r\n" +
                        "Content-Type: application/json; charset=utf-8\r\n" +
-                       "Access-Control-Allow-Origin: *\r\n" +
                        $"Content-Length: {payload.Length}\r\n" +
                        "Connection: close\r\n\r\n";
             var headBytes = Encoding.ASCII.GetBytes(head);
@@ -355,6 +379,15 @@ namespace ProSimpleMapExport
             var obj = new Dictionary<string, object> { ["ok"] = ok };
             if (ok) obj["data"] = data; else obj["error"] = error;
             return JsonSerializer.Serialize(obj);
+        }
+
+        // Constant-time string comparison (avoids leaking the token via response timing).
+        private static bool FixedTimeEquals(string a, string b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            int diff = 0;
+            for (int i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
+            return diff == 0;
         }
     }
 }

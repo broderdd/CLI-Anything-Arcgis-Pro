@@ -17,6 +17,9 @@ import urllib.error
 # Where the in-Pro add-in bridge listens. Override with ARCGIS_BRIDGE_URL when the
 # server and ArcGIS Pro are on different hosts (e.g. running this in a container).
 BRIDGE_URL = os.environ.get("ARCGIS_BRIDGE_URL", "http://127.0.0.1:5005/")
+# Shared secret matching the in-Pro bridge (ARCGIS_BRIDGE_TOKEN). Sent as the
+# X-Bridge-Token header on every request so only this MCP server can drive Pro.
+_BRIDGE_TOKEN = os.environ.get("ARCGIS_BRIDGE_TOKEN", "")
 
 # --- Deny-by-default deletion guard -----------------------------------------
 # Block any geoprocessing tool whose name looks destructive (Delete*/Truncate*)
@@ -45,9 +48,10 @@ def log(msg):
 def call_bridge(payload, timeout=180):
     """POST a command to the in-Pro bridge and return its parsed JSON."""
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        BRIDGE_URL, data=data, headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json"}
+    if _BRIDGE_TOKEN:
+        headers["X-Bridge-Token"] = _BRIDGE_TOKEN
+    req = urllib.request.Request(BRIDGE_URL, data=data, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
