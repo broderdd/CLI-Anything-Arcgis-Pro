@@ -188,6 +188,18 @@ namespace ProSimpleMapExport
                         // Replays the last run_gp; delegates to DoRunGp -> ExecuteToolAsync.
                         data = DoRerunHistory(re).GetAwaiter().GetResult();
                         break;
+                    case "list_layers":
+                        // Enumerate a map's layers (name + group-qualified longName + source) so a
+                        // headless caller can discover EXACT, resolvable layer references. GP layer
+                        // params resolve top-level names against the active map but not group-nested
+                        // leaf names, so 'nested' flags which refs need the active map / longName.
+                        data = QueuedTask.Run(() => (object)DoListLayers(re)).GetAwaiter().GetResult();
+                        break;
+                    case "activate_map":
+                        // Open/activate a map by name so headless GP resolves ITS layer params.
+                        // CreateMapPaneAsync marshals to the UI thread itself; do NOT wrap in QueuedTask.
+                        data = DoActivateMap(re).GetAwaiter().GetResult();
+                        break;
                     // --- additive live-authoring commands (BridgeAuthoring.cs) ---
                     case "get_cim":
                         data = QueuedTask.Run(() => (object)DoGetCim(re)).GetAwaiter().GetResult();
@@ -363,6 +375,71 @@ namespace ProSimpleMapExport
             return new { map = map.Name, layer = layer.Name, where, returned = rows.Count, rows };
         }
 
+        // List every layer in a map (flattened through groups). Returns each layer's leaf Name,
+        // its group-qualified longName (e.g. "Tenure Context\Crown Title Land"), a 'nested' flag,
+        // type, and best-effort data-source path. Lets a headless caller pick layer references that
+        // GP can actually resolve. Runs on the MCT (dispatched via QueuedTask).
+        private static object DoListLayers(JsonElement root)
+        {
+            Map map = null;
+            string mapName = Str(root, "map");
+            if (!string.IsNullOrWhiteSpace(mapName))
+                map = Project.Current.GetItems<MapProjectItem>()
+                    .FirstOrDefault(m => string.Equals(m.Name, mapName, StringComparison.OrdinalIgnoreCase))?.GetMap();
+            map ??= MapView.Active?.Map;
+            map ??= Project.Current.GetItems<MapProjectItem>().FirstOrDefault()?.GetMap();
+            if (map == null) throw new Exception("工程里没有可用的地图");
+
+            var layers = new List<object>();
+            foreach (var l in map.GetLayersAsFlattenedList())
+            {
+                // Build the group-qualified long name by walking parents.
+                var parts = new List<string> { l.Name };
+                var parent = l.Parent;
+                while (parent is GroupLayer gl) { parts.Insert(0, gl.Name); parent = gl.Parent; }
+
+                string ds = null;
+                if (l is FeatureLayer fl)
+                {
+                    try { ds = fl.GetFeatureClass()?.GetPath()?.ToString(); } catch { }
+                }
+                layers.Add(new
+                {
+                    name = l.Name,
+                    longName = string.Join("\\", parts),
+                    nested = parts.Count > 1,
+                    type = l.GetType().Name,
+                    isFeatureLayer = l is FeatureLayer,
+                    dataSource = ds
+                });
+            }
+            return new { map = map.Name, count = layers.Count, layers };
+        }
+
+        // Open (or re-activate) a map by name so it becomes the active view. Headless GP resolves
+        // GPLayer/GPFeatureLayer name params against the ACTIVE map, so driving a map-based custom
+        // tool requires its source map to be active first. CreateMapPaneAsync marshals to the UI
+        // thread internally, so this is NOT wrapped in QueuedTask by the dispatcher.
+        private static async System.Threading.Tasks.Task<object> DoActivateMap(JsonElement root)
+        {
+            string mapName = Str(root, "map");
+            if (string.IsNullOrWhiteSpace(mapName)) throw new Exception("missing 'map'");
+            var item = Project.Current.GetItems<MapProjectItem>()
+                .FirstOrDefault(m => string.Equals(m.Name, mapName, StringComparison.OrdinalIgnoreCase));
+            if (item == null) throw new Exception($"map not found: {mapName}");
+
+            Map map = await QueuedTask.Run(() => item.GetMap());
+            // Reuse an already-open pane for this map if present; otherwise open a new one.
+            var existing = ProApp.Panes.OfType<IMapPane>()
+                .FirstOrDefault(p => string.Equals(p.MapView?.Map?.URI, map.URI, StringComparison.OrdinalIgnoreCase));
+            if (existing is ArcGIS.Desktop.Framework.Contracts.Pane pane)
+                pane.Activate();
+            else
+                await ProApp.Panes.CreateMapPaneAsync(map);
+
+            return new { activated = map.Name, uri = map.URI };
+        }
+
         private static async System.Threading.Tasks.Task<object> DoRunGp(JsonElement root)
         {
             string tool = Str(root, "tool");
@@ -424,21 +501,39 @@ namespace ProSimpleMapExport
             };
         }
 
-        // [#2] Recursively convert a JSON value to a GP parameter value: arrays -> List<object>
-        // (multiValue, or nested ValueTable rows), strings -> string, null -> null, other scalars
-        // -> their literal text. NOTE (verify on build): Geoprocessing.MakeValueArray is expected
-        // to accept List<object> for a multiValue param and List<List<object>> for a ValueTable.
-        // If your Pro SDK build instead requires the ';'/space-delimited string encoding, adapt
-        // the Array case here (join scalars with ';', rows with ';' and columns with ' ').
+        // [#2] Convert a JSON value to a GP parameter value. CONFIRMED at runtime: MakeValueArray
+        // does NOT accept List<object>/List<List<object>> for multiValue/ValueTable params - it
+        // stringifies them and the GP framework then re-splits on spaces, corrupting any value
+        // containing a space (e.g. "Land Tenure" -> "Land","Tenure"). So arrays are encoded as the
+        // GP delimited-string format instead:
+        //   * array of scalars (multiValue) -> values joined by ';'
+        //   * array of arrays  (ValueTable) -> rows joined by ';', columns by ' ', each cell
+        //                                      single-quoted when empty or containing whitespace.
+        // Scalars pass through as their literal text; null -> null.
         private static object JsonToGpValue(JsonElement el)
         {
             switch (el.ValueKind)
             {
                 case JsonValueKind.Array:
-                    var list = new List<object>();
-                    foreach (var item in el.EnumerateArray())
-                        list.Add(JsonToGpValue(item));
-                    return list;
+                    bool isTable = false;
+                    foreach (var probe in el.EnumerateArray()) { isTable = probe.ValueKind == JsonValueKind.Array; break; }
+                    if (isTable)
+                    {
+                        var rows = new List<string>();
+                        foreach (var row in el.EnumerateArray())
+                        {
+                            var cells = new List<string>();
+                            if (row.ValueKind == JsonValueKind.Array)
+                                foreach (var cell in row.EnumerateArray()) cells.Add(GpCell(cell));
+                            else
+                                cells.Add(GpCell(row));
+                            rows.Add(string.Join(" ", cells));
+                        }
+                        return string.Join(";", rows);
+                    }
+                    var vals = new List<string>();
+                    foreach (var item in el.EnumerateArray()) vals.Add(GpScalarText(item));
+                    return string.Join(";", vals);
                 case JsonValueKind.String:
                     return el.GetString();
                 case JsonValueKind.Null:
@@ -446,6 +541,22 @@ namespace ProSimpleMapExport
                 default:
                     return el.ToString();  // numbers / bools as their literal text
             }
+        }
+
+        // Raw scalar text for a JSON value (multiValue entries: ';' is the only delimiter, so
+        // embedded spaces are fine and need no quoting).
+        private static string GpScalarText(JsonElement el) =>
+            el.ValueKind == JsonValueKind.Null ? "" :
+            el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
+
+        // One ValueTable cell: single-quote when empty or containing whitespace/quote/semicolon so
+        // the GP space-delimited row parser keeps it as a single column. Empty -> '' (empty cell).
+        private static string GpCell(JsonElement el)
+        {
+            string s = GpScalarText(el);
+            if (s.Length == 0 || s.IndexOfAny(new[] { ' ', '\t', '\'', '"', ';' }) >= 0)
+                return "'" + s.Replace("'", "''") + "'";
+            return s;
         }
 
         // [#4] The most recent run_gp invocation, captured for rerun_history.
