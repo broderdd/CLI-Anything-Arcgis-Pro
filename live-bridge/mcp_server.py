@@ -168,6 +168,168 @@ TOOLS = [
             "required": ["tool", "params"],
         },
     },
+    # ---- additive live-authoring tools (forwarded to BridgeAuthoring.cs) ----
+    {
+        "name": "arcgis_get_cim",
+        "description": (
+            "Read the CIM definition (as JSON) of a target in the live project. target: "
+            "omit/'layer' for a layer (give 'layer'); 'map'; 'layout' (give 'layout'); "
+            "'element' (give 'layout' + 'element'). Workhorse for inspecting symbology, "
+            "renderer labels, definition queries, data connections before editing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "layer|map|layout|element (default layer)."},
+                "layer": {"type": "string", "description": "Layer name (when target=layer)."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+                "layout": {"type": "string", "description": "Layout name (when target=layout|element)."},
+                "element": {"type": "string", "description": "Layout element name (when target=element)."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "arcgis_set_cim",
+        "description": (
+            "Replace the CIM definition of a target from JSON (same shape arcgis_get_cim "
+            "returns, passed back under 'cim'). One mechanism for: definition-query edits, "
+            "layer rename, renderer class-label edits (e.g. CIMUniqueValueRenderer group/class "
+            ".Label text), and datasource repointing. target as in arcgis_get_cim."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cim": {"type": "object", "description": "The full CIM definition JSON to apply."},
+                "target": {"type": "string", "description": "layer|map|layout|element (default layer)."},
+                "layer": {"type": "string", "description": "Layer name (when target=layer)."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+                "layout": {"type": "string", "description": "Layout name (when target=layout|element)."},
+                "element": {"type": "string", "description": "Layout element name (when target=element)."},
+            },
+            "required": ["cim"],
+        },
+    },
+    {
+        "name": "arcgis_rename_layer",
+        "description": "Rename a layer in the live project.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Current layer name."},
+                "name": {"type": "string", "description": "New layer name."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+            },
+            "required": ["layer", "name"],
+        },
+    },
+    {
+        "name": "arcgis_set_definition_query",
+        "description": (
+            "Set (or clear) a feature layer's active definition query. Empty/missing 'query' clears it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Feature layer name."},
+                "query": {"type": "string", "description": "SQL where clause; empty clears the definition query."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+            },
+            "required": ["layer"],
+        },
+    },
+    {
+        "name": "arcgis_set_visibility",
+        "description": "Show/hide a layer in the table of contents.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Layer name."},
+                "visible": {"type": "boolean", "description": "true to show, false to hide."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+            },
+            "required": ["layer", "visible"],
+        },
+    },
+    {
+        "name": "arcgis_create_group",
+        "description": "Create a new empty group layer in a map.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "New group layer name."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+                "index": {"type": "integer", "description": "TOC insert index (default 0 = top)."},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "arcgis_move_layer",
+        "description": (
+            "Move/reorder a layer in the TOC and/or into a group. 'group' empty/missing moves to "
+            "map root; 'index' is the target position (0 = top)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Layer name to move."},
+                "group": {"type": "string", "description": "Destination group layer name (optional)."},
+                "index": {"type": "integer", "description": "Target position (default 0)."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+            },
+            "required": ["layer"],
+        },
+    },
+    {
+        "name": "arcgis_clone_layer",
+        "description": (
+            "Duplicate a layer (full CIM: symbology + label classes + definition queries) one or "
+            "more times into the same map, optionally into a group. 'count'>1 appends an index to "
+            "'name'."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Source layer name."},
+                "name": {"type": "string", "description": "New layer name (base name if count>1)."},
+                "count": {"type": "integer", "description": "How many clones (default 1)."},
+                "group": {"type": "string", "description": "Destination group layer name (optional)."},
+                "index": {"type": "integer", "description": "Insert index within container (default 0)."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+            },
+            "required": ["layer"],
+        },
+    },
+    {
+        "name": "arcgis_set_layout_text",
+        "description": "Set the text of a named layout text element (e.g. 'Title', 'Title Description').",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "element": {"type": "string", "description": "Layout element name."},
+                "text": {"type": "string", "description": "New text."},
+                "layout": {"type": "string", "description": "Layout name (optional; else active/first)."},
+            },
+            "required": ["element", "text"],
+        },
+    },
+    {
+        "name": "arcgis_repoint_datasource",
+        "description": (
+            "Point a layer at a different feature class in a file geodatabase (e.g. a dissolved copy)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Layer name."},
+                "gdb": {"type": "string", "description": r"File geodatabase path, e.g. C:\d.gdb"},
+                "dataset": {"type": "string", "description": "Feature class name within the gdb."},
+                "map": {"type": "string", "description": "Map name (optional)."},
+            },
+            "required": ["layer", "gdb", "dataset"],
+        },
+    },
 ]
 
 
@@ -202,6 +364,17 @@ def handle(req):
             "arcgis_zoom_to": "zoom_to",
             "arcgis_query": "query",
             "arcgis_run_gp": "run_gp",
+            # additive live-authoring commands (BridgeAuthoring.cs)
+            "arcgis_get_cim": "get_cim",
+            "arcgis_set_cim": "set_cim",
+            "arcgis_rename_layer": "rename_layer",
+            "arcgis_set_definition_query": "set_definition_query",
+            "arcgis_set_visibility": "set_visibility",
+            "arcgis_create_group": "create_group",
+            "arcgis_move_layer": "move_layer",
+            "arcgis_clone_layer": "clone_layer",
+            "arcgis_set_layout_text": "set_layout_text",
+            "arcgis_repoint_datasource": "repoint_datasource",
         }
         cmd = command_map.get(name)
         if cmd is None:

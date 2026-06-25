@@ -27,7 +27,7 @@ namespace ProSimpleMapExport
     /// Uses a raw TcpListener on 127.0.0.1 (no admin / no URL-ACL needed) speaking
     /// minimal HTTP/1.1. Protocol: POST a JSON body {"command": "...", ...params}.
     /// </summary>
-    internal static class BridgeServer
+    internal static partial class BridgeServer
     {
         public const int Port = 5005;
         public static readonly string LogPath =
@@ -183,6 +183,37 @@ namespace ProSimpleMapExport
                     case "run_gp":
                         // ExecuteToolAsync manages its own threading; do NOT wrap in QueuedTask.
                         data = DoRunGp(re).GetAwaiter().GetResult();
+                        break;
+                    // --- additive live-authoring commands (BridgeAuthoring.cs) ---
+                    case "get_cim":
+                        data = QueuedTask.Run(() => (object)DoGetCim(re)).GetAwaiter().GetResult();
+                        break;
+                    case "set_cim":
+                        data = QueuedTask.Run(() => (object)DoSetCim(re)).GetAwaiter().GetResult();
+                        break;
+                    case "rename_layer":
+                        data = QueuedTask.Run(() => (object)DoRenameLayer(re)).GetAwaiter().GetResult();
+                        break;
+                    case "set_definition_query":
+                        data = QueuedTask.Run(() => (object)DoSetDefinitionQuery(re)).GetAwaiter().GetResult();
+                        break;
+                    case "set_visibility":
+                        data = QueuedTask.Run(() => (object)DoSetVisibility(re)).GetAwaiter().GetResult();
+                        break;
+                    case "create_group":
+                        data = QueuedTask.Run(() => (object)DoCreateGroup(re)).GetAwaiter().GetResult();
+                        break;
+                    case "move_layer":
+                        data = QueuedTask.Run(() => (object)DoMoveLayer(re)).GetAwaiter().GetResult();
+                        break;
+                    case "clone_layer":
+                        data = QueuedTask.Run(() => (object)DoCloneLayer(re)).GetAwaiter().GetResult();
+                        break;
+                    case "set_layout_text":
+                        data = QueuedTask.Run(() => (object)DoSetLayoutText(re)).GetAwaiter().GetResult();
+                        break;
+                    case "repoint_datasource":
+                        data = QueuedTask.Run(() => (object)DoRepointDatasource(re)).GetAwaiter().GetResult();
                         break;
                     default:
                         return Json(false, null, $"unknown command: {command}");
