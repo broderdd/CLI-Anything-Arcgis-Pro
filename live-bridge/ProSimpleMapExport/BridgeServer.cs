@@ -184,6 +184,10 @@ namespace ProSimpleMapExport
                         // ExecuteToolAsync manages its own threading; do NOT wrap in QueuedTask.
                         data = DoRunGp(re).GetAwaiter().GetResult();
                         break;
+                    case "rerun_history":
+                        // Replays the last run_gp; delegates to DoRunGp -> ExecuteToolAsync.
+                        data = DoRerunHistory(re).GetAwaiter().GetResult();
+                        break;
                     // --- additive live-authoring commands (BridgeAuthoring.cs) ---
                     case "get_cim":
                         data = QueuedTask.Run(() => (object)DoGetCim(re)).GetAwaiter().GetResult();
@@ -363,15 +367,28 @@ namespace ProSimpleMapExport
         {
             string tool = Str(root, "tool");
             if (string.IsNullOrWhiteSpace(tool))
-                throw new Exception("missing 'tool' (例如 analysis.Buffer)");
+                throw new Exception("missing 'tool' (e.g. analysis.Buffer, or a custom-toolbox tool name)");
 
-            // Positional parameters as a JSON array of strings.
+            // [#1] Resolve a CUSTOM toolbox tool that is NOT on the default GP search path
+            // (e.g. the Create Maps .pyt). If 'toolbox' (full path to a .pyt/.atbx/.tbx) is
+            // supplied, build the full '<toolbox>\<tool>' reference that ExecuteToolAsync can
+            // open. System tools (analysis.Buffer, ...) keep working with no 'toolbox'.
+            string toolbox = Str(root, "toolbox");
+            string toolRef = string.IsNullOrWhiteSpace(toolbox)
+                ? tool
+                : toolbox.TrimEnd('\\', '/') + "\\" + tool;
+
+            // [#2] STRUCTURED parameters. Preserve JSON arrays so multiValue params (a list) and
+            // ValueTables (a list of rows, each a list of column values) survive instead of being
+            // flattened to a single string. Scalars still pass through as strings. This is what
+            // lets the 85-param Create Maps tool (buffer/group/extra/legend ValueTables + the 20
+            // multiValue Quick-Assign slots) be expressed at all.
             var values = new List<object>();
             if (root.ValueKind == JsonValueKind.Object &&
                 root.TryGetProperty("params", out var p) && p.ValueKind == JsonValueKind.Array)
             {
                 foreach (var el in p.EnumerateArray())
-                    values.Add(el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString());
+                    values.Add(JsonToGpValue(el));
             }
 
             // Use the NON-modal overload: (tool, values, environments, CancellationToken?,
@@ -380,14 +397,24 @@ namespace ProSimpleMapExport
             var valueArray = Geoprocessing.MakeValueArray(values.ToArray());
             var environments = Geoprocessing.MakeEnvironmentArray(overwriteoutput: true);
             var gpResult = await Geoprocessing.ExecuteToolAsync(
-                tool, valueArray, environments,
+                toolRef, valueArray, environments,
                 (System.Threading.CancellationToken?)null,
                 (GPToolExecuteEventHandler)null,
                 GPExecuteToolFlags.AddOutputsToMap);
 
+            // [#4] Record this invocation so 'rerun_history' can replay it verbatim, without the
+            // caller rebuilding the (potentially 85-) parameter set.
+            _lastGpRun = new GpRunRecord
+            {
+                Tool = tool,
+                Toolbox = toolbox,
+                ParamsJson = (root.ValueKind == JsonValueKind.Object &&
+                              root.TryGetProperty("params", out var pj)) ? pj.GetRawText() : "[]",
+            };
+
             return new
             {
-                tool,
+                tool = toolRef,
                 succeeded = !gpResult.IsFailed,
                 errorCode = gpResult.ErrorCode,
                 returnValue = gpResult.ReturnValue,
@@ -395,6 +422,56 @@ namespace ProSimpleMapExport
                 messages = gpResult.Messages?.Select(m => m.Text).ToArray(),
                 errorMessages = gpResult.ErrorMessages?.Select(m => m.Text).ToArray(),
             };
+        }
+
+        // [#2] Recursively convert a JSON value to a GP parameter value: arrays -> List<object>
+        // (multiValue, or nested ValueTable rows), strings -> string, null -> null, other scalars
+        // -> their literal text. NOTE (verify on build): Geoprocessing.MakeValueArray is expected
+        // to accept List<object> for a multiValue param and List<List<object>> for a ValueTable.
+        // If your Pro SDK build instead requires the ';'/space-delimited string encoding, adapt
+        // the Array case here (join scalars with ';', rows with ';' and columns with ' ').
+        private static object JsonToGpValue(JsonElement el)
+        {
+            switch (el.ValueKind)
+            {
+                case JsonValueKind.Array:
+                    var list = new List<object>();
+                    foreach (var item in el.EnumerateArray())
+                        list.Add(JsonToGpValue(item));
+                    return list;
+                case JsonValueKind.String:
+                    return el.GetString();
+                case JsonValueKind.Null:
+                    return null;
+                default:
+                    return el.ToString();  // numbers / bools as their literal text
+            }
+        }
+
+        // [#4] The most recent run_gp invocation, captured for rerun_history.
+        private sealed class GpRunRecord
+        {
+            public string Tool;
+            public string Toolbox;
+            public string ParamsJson;
+        }
+        private static GpRunRecord _lastGpRun;
+
+        // [#4] Replay the most recent run_gp call (same tool/toolbox/params). This sidesteps
+        // reconstructing a large parameter set when re-running an analysis. NOTE: it replays the
+        // last BRIDGE-invoked run_gp; the Pro SDK exposes no public API to enumerate/re-run the
+        // interactive GP *history*, so a UI-initiated run is not visible here. Workflow: drive the
+        // tool once via run_gp (structured params), then rerun_history replays it.
+        private static async System.Threading.Tasks.Task<object> DoRerunHistory(JsonElement root)
+        {
+            if (_lastGpRun == null)
+                throw new Exception("no prior run_gp invocation recorded to re-run");
+            string rebuilt = "{\"tool\":" + JsonSerializer.Serialize(_lastGpRun.Tool ?? "")
+                + ",\"toolbox\":" + JsonSerializer.Serialize(_lastGpRun.Toolbox ?? "")
+                + ",\"params\":" + (string.IsNullOrEmpty(_lastGpRun.ParamsJson) ? "[]" : _lastGpRun.ParamsJson)
+                + "}";
+            using var doc = JsonDocument.Parse(rebuilt);
+            return await DoRunGp(doc.RootElement.Clone());
         }
 
         private static string Str(JsonElement root, string name) =>
