@@ -20,8 +20,11 @@ namespace ProSimpleMapExport
     /// repointing in one mechanism. A few structural commands (clone_layer, create_group,
     /// move_layer, set_visibility, set_layout_text) cover what CIM-set alone can't do cleanly.
     ///
-    /// Everything here runs on the MCT (QueuedTask) — Dispatch() in BridgeServer.cs wraps
-    /// these the same way as the existing handlers. Strictly current-project scoped.
+    /// Most of these run on the MCT (QueuedTask) — Dispatch() in BridgeServer.cs wraps them the
+    /// same way as the existing handlers. The one exception is save_project: Project.SaveAsync()
+    /// must run on the application UI thread (System.Windows.Application.Current.Dispatcher), not
+    /// the MCT, so DoSaveProject marshals itself and Dispatch() awaits it directly. Strictly
+    /// current-project scoped.
     /// </summary>
     internal static partial class BridgeServer
     {
@@ -325,18 +328,26 @@ namespace ProSimpleMapExport
 
         /// <summary>
         /// save_project — persist the open project so live edits survive without a manual
-        /// Ctrl+S. Project.SaveAsync() must run on the MCT, so the await is wrapped in
-        /// QueuedTask.Run (mirroring delete_layer / the other MCT handlers); Dispatch() awaits
-        /// the returned Task. Awaiting SaveAsync() directly off the dispatcher thread throws
+        /// Ctrl+S. Project.SaveAsync() must run on the application UI thread (NOT the MCT):
+        /// v2.1 ran it on the request thread and v2.2 ran it on the MCT/QueuedTask — both threw
         /// "The calling thread cannot access this object because a different thread owns it."
+        /// FrameworkApplication.Current is not public in the 3.7 SDK, but FrameworkApplication
+        /// derives from System.Windows.Application (UseWPF=true), so the UI-thread dispatcher is
+        /// reachable as System.Windows.Application.Current.Dispatcher. The Project.Current read,
+        /// null-check, SaveAsync(), and proj.Path read all happen on that dispatcher; no QueuedTask.
         ///   {"command":"save_project"}
         /// </summary>
         private static async System.Threading.Tasks.Task<object> DoSaveProject(JsonElement root)
         {
-            var proj = Project.Current;
-            if (proj == null) throw new Exception("no open project to save");
-            await QueuedTask.Run(async () => await proj.SaveAsync());
-            return new { saved = true, path = proj.Path };
+            var dispatcher = System.Windows.Application.Current.Dispatcher;
+            string path = await dispatcher.Invoke(async () =>
+            {
+                var proj = Project.Current;
+                if (proj == null) throw new Exception("no open project to save");
+                await proj.SaveAsync();
+                return proj.Path;
+            });
+            return new { saved = true, path };
         }
 
         /// <summary>
