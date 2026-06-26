@@ -325,15 +325,17 @@ namespace ProSimpleMapExport
 
         /// <summary>
         /// save_project — persist the open project so live edits survive without a manual
-        /// Ctrl+S. Project.SaveAsync() manages its own threading, so (like run_gp /
-        /// activate_map) it is awaited directly by Dispatch() and NOT wrapped in QueuedTask.
+        /// Ctrl+S. Project.SaveAsync() must run on the MCT, so the await is wrapped in
+        /// QueuedTask.Run (mirroring delete_layer / the other MCT handlers); Dispatch() awaits
+        /// the returned Task. Awaiting SaveAsync() directly off the dispatcher thread throws
+        /// "The calling thread cannot access this object because a different thread owns it."
         ///   {"command":"save_project"}
         /// </summary>
         private static async System.Threading.Tasks.Task<object> DoSaveProject(JsonElement root)
         {
             var proj = Project.Current;
             if (proj == null) throw new Exception("no open project to save");
-            await proj.SaveAsync();
+            await QueuedTask.Run(async () => await proj.SaveAsync());
             return new { saved = true, path = proj.Path };
         }
 
@@ -356,11 +358,11 @@ namespace ProSimpleMapExport
                 .Where(l => string.Equals(l.Name, layerName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             if (matches.Count == 0)
-                throw new Exception($"地图「{map.Name}」里找不到图层: {layerName}");
+                throw new Exception($"layer not found in map '{map.Name}': {layerName}");
             if (matches.Count > 1)
                 throw new Exception(
-                    $"图层名「{layerName}」在地图「{map.Name}」里匹配到 {matches.Count} 个图层；" +
-                    "delete_layer 只删唯一命名的单个图层，请用更精确的名称。");
+                    $"found {matches.Count} layers named '{layerName}' in map '{map.Name}'; " +
+                    "delete_layer removes only a single uniquely-named layer — specify the map or a more precise name to disambiguate.");
 
             var layer = matches[0];
             string removed = layer.Name;

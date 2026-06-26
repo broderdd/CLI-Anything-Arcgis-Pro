@@ -232,7 +232,8 @@ namespace ProSimpleMapExport
                         data = QueuedTask.Run(() => (object)DoRepointDatasource(re)).GetAwaiter().GetResult();
                         break;
                     case "save_project":
-                        // Project.SaveAsync manages its own threading; do NOT wrap in QueuedTask.
+                        // Project.SaveAsync must run on the MCT; DoSaveProject wraps it in
+                        // QueuedTask.Run internally and returns the Task we await here.
                         data = DoSaveProject(re).GetAwaiter().GetResult();
                         break;
                     case "delete_layer":

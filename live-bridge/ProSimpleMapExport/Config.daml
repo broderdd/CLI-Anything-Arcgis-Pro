@@ -5,7 +5,7 @@
         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
         xsi:schemaLocation="http://schemas.esri.com/DADF/Registry file:///C:/Program%20Files/ArcGIS/Pro/bin/ArcGIS.Desktop.Framework.xsd">
 
-  <AddInInfo id="{3a1b9c4e-7d2f-4b6a-9e1c-8f5a2d3b4c6e}" version="2.1" desktopVersion="3.7">
+  <AddInInfo id="{3a1b9c4e-7d2f-4b6a-9e1c-8f5a2d3b4c6e}" version="2.2" desktopVersion="3.7">
     <Name>ProSimpleMapExport</Name>
     <Description>一键把当前布局导出为 300dpi PDF</Description>
     <Image>Images\AddinDesktop32.png</Image>
