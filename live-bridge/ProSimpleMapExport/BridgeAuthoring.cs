@@ -323,6 +323,51 @@ namespace ProSimpleMapExport
             return new { layer = layer.Name, gdb, dataset, repointed = true };
         }
 
+        /// <summary>
+        /// save_project — persist the open project so live edits survive without a manual
+        /// Ctrl+S. Project.SaveAsync() manages its own threading, so (like run_gp /
+        /// activate_map) it is awaited directly by Dispatch() and NOT wrapped in QueuedTask.
+        ///   {"command":"save_project"}
+        /// </summary>
+        private static async System.Threading.Tasks.Task<object> DoSaveProject(JsonElement root)
+        {
+            var proj = Project.Current;
+            if (proj == null) throw new Exception("no open project to save");
+            await proj.SaveAsync();
+            return new { saved = true, path = proj.Path };
+        }
+
+        /// <summary>
+        /// delete_layer — remove a single, explicitly-named layer from a map (map authoring;
+        /// does NOT delete data on disk). SAFETY: resolves the name to EXACTLY ONE layer; if
+        /// zero or more than one layer matches, it errors rather than guessing or bulk-removing.
+        /// No wildcards.
+        ///   {"command":"delete_layer","layer":"Wind Turbines"[,"map":"Map name"]}
+        /// </summary>
+        private static object DoDeleteLayer(JsonElement root)
+        {
+            string layerName = Str(root, "layer");
+            if (string.IsNullOrWhiteSpace(layerName)) throw new Exception("missing 'layer'");
+            var map = ResolveMap(root);
+
+            // Same name-match semantics as ResolveLayer (case-insensitive, flattened through
+            // groups) but require a UNIQUE match — never silently pick the first of duplicates.
+            var matches = map.GetLayersAsFlattenedList()
+                .Where(l => string.Equals(l.Name, layerName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count == 0)
+                throw new Exception($"地图「{map.Name}」里找不到图层: {layerName}");
+            if (matches.Count > 1)
+                throw new Exception(
+                    $"图层名「{layerName}」在地图「{map.Name}」里匹配到 {matches.Count} 个图层；" +
+                    "delete_layer 只删唯一命名的单个图层，请用更精确的名称。");
+
+            var layer = matches[0];
+            string removed = layer.Name;
+            map.RemoveLayer(layer);
+            return new { removed, map = map.Name };
+        }
+
         // ---- resolvers / helpers ----------------------------------------------------
 
         private static Map ResolveMap(JsonElement root)

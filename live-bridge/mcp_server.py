@@ -330,6 +330,30 @@ TOOLS = [
             "required": ["layer", "gdb", "dataset"],
         },
     },
+    {
+        "name": "arcgis_save_project",
+        "description": (
+            "Save the open ArcGIS Pro project (Project.Current.SaveAsync), so live edits "
+            "persist without a manual Ctrl+S. Returns the project path."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "arcgis_delete_layer",
+        "description": (
+            "Remove a single, explicitly-named layer from a map (map authoring; does NOT "
+            "delete data on disk). Errors if the name does not resolve to exactly one layer "
+            "(no wildcards, never bulk-removes)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "layer": {"type": "string", "description": "Exact layer name to remove."},
+                "map": {"type": "string", "description": "Map name (optional; default = active map)."},
+            },
+            "required": ["layer"],
+        },
+    },
 ]
 
 
@@ -375,6 +399,8 @@ def handle(req):
             "arcgis_clone_layer": "clone_layer",
             "arcgis_set_layout_text": "set_layout_text",
             "arcgis_repoint_datasource": "repoint_datasource",
+            "arcgis_save_project": "save_project",
+            "arcgis_delete_layer": "delete_layer",
         }
         cmd = command_map.get(name)
         if cmd is None:

@@ -231,6 +231,13 @@ namespace ProSimpleMapExport
                     case "repoint_datasource":
                         data = QueuedTask.Run(() => (object)DoRepointDatasource(re)).GetAwaiter().GetResult();
                         break;
+                    case "save_project":
+                        // Project.SaveAsync manages its own threading; do NOT wrap in QueuedTask.
+                        data = DoSaveProject(re).GetAwaiter().GetResult();
+                        break;
+                    case "delete_layer":
+                        data = QueuedTask.Run(() => (object)DoDeleteLayer(re)).GetAwaiter().GetResult();
+                        break;
                     default:
                         return Json(false, null, $"unknown command: {command}");
                 }
