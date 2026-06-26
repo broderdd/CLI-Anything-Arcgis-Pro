@@ -437,14 +437,12 @@ namespace ProSimpleMapExport
             if (item == null) throw new Exception($"map not found: {mapName}");
 
             Map map = await QueuedTask.Run(() => item.GetMap());
-            // Reuse an already-open pane for this map if present; otherwise open a new one.
-            var existing = ProApp.Panes.OfType<IMapPane>()
-                .FirstOrDefault(p => string.Equals(p.MapView?.Map?.URI, map.URI, StringComparison.OrdinalIgnoreCase));
-            if (existing is ArcGIS.Desktop.Framework.Contracts.Pane pane)
-                pane.Activate();
-            else
-                await ProApp.Panes.CreateMapPaneAsync(map);
-
+            // CreateMapPaneAsync opens AND activates the map, marshalling to the UI thread itself.
+            // (Earlier bug: the existing-pane branch called pane.Activate() on the bridge worker
+            // thread - a silent no-op, so activate_map "returned ok" but MapView.Active never
+            // changed. Verified: polling the active map after that path showed no switch at all.
+            // Always creating a pane is reliable; a duplicate pane is harmless cosmetic clutter.)
+            await ProApp.Panes.CreateMapPaneAsync(map);
             return new { activated = map.Name, uri = map.URI };
         }
 
